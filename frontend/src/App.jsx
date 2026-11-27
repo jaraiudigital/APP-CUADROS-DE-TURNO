@@ -1,51 +1,200 @@
 // frontend/src/App.jsx
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Plus, Trash2, Eye, Download, Calendar, Users, Briefcase } from 'lucide-react';
+import { supabase } from './supabaseClient';
+import Auth from './Auth';
+import { Plus, Trash2, Eye, Download, Calendar, Users, Briefcase, Save, History, LogOut } from 'lucide-react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
+const DIAS_SEMANA = [
+  { id: 1, label: 'Lun' },
+  { id: 2, label: 'Mar' },
+  { id: 3, label: 'Mié' },
+  { id: 4, label: 'Jue' },
+  { id: 5, label: 'Vie' },
+  { id: 6, label: 'Sáb' },
+  { id: 0, label: 'Dom' }
+];
+
 export default function App() {
-  // 1. Configuración general
+  const [session, setSession] = useState(null);
+  const [recuperandoClave, setRecuperandoClave] = useState(false);
+  const [nuevaClave, setNuevaClave] = useState('');
+
+  // Configuración general
   const [anio, setAnio] = useState(2026);
   const [mes, setMes] = useState(11);
   const [modalidad, setModalidad] = useState('LUNES_DOMINGO_24H');
 
-  // 2. Asignaciones
-  const [asignaciones, setAsignaciones] = useState([
-    { id: 'A1', nombre: 'Caja Principal', horas: 8, turno: 'DIA' },
-    { id: 'A2', nombre: 'Soporte Nocturno', horas: 12, turno: 'NOCHE' }
-  ]);
-  const [nuevaAsig, setNuevaAsig] = useState({ nombre: '', horas: 8, turno: 'DIA' });
+  // Asignaciones con AM/PM, horario y días aplicables
+  const [asignaciones, setAsignaciones] = useState([]);
+  const [nuevaAsig, setNuevaAsig] = useState({
+    nombre: '',
+    horas: 8,
+    jornada: 'AM',
+    horario: '06:00 - 14:00',
+    diasAplicables: [1, 2, 3, 4, 5, 6, 0]
+  });
 
-  // 3. Empleados y sus permisos/peticiones
-  const [empleados, setEmpleados] = useState([
-    {
-      id: 'E1',
-      nombre: 'Carlos Pérez',
-      asignacionesPermitidas: ['A1', 'A2'],
-      peticiones: [{ diaInicio: 15, diaFin: 15, tipo: 'LIBRE' }]
-    },
-    {
-      id: 'E2',
-      nombre: 'Ana Gómez',
-      asignacionesPermitidas: ['A1'],
-      peticiones: []
-    }
-  ]);
+  // Empleados
+  const [empleados, setEmpleados] = useState([]);
   const [nuevoEmpNombre, setNuevoEmpNombre] = useState('');
 
-  // 4. Estados de previsualización editable
+  // Previsualización e Historial
   const [diasMes, setDiasMes] = useState([]);
   const [matrizPreview, setMatrizPreview] = useState(null);
   const [nuevoEmpleadoTabla, setNuevoEmpleadoTabla] = useState('');
+  const [historialCuadros, setHistorialCuadros] = useState([]);
+
+  // --- CONTROL DE SESIÓN ---
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      if (session) cargarDatosUsuario(session.user.id);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      setSession(session);
+      if (event === 'PASSWORD_RECOVERY') {
+        setRecuperandoClave(true);
+      }
+      if (session) cargarDatosUsuario(session.user.id);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const cargarDatosUsuario = async (userId) => {
+    // 1. Cargar entorno (empleados y asignaciones)
+    const { data: entorno } = await supabase
+      .from('entornos')
+      .select('*')
+      .eq('user_id', userId)
+      .single();
+
+    if (entorno) {
+      setAsignaciones(entorno.asignaciones || []);
+      setEmpleados(entorno.empleados || []);
+    }
+
+    // 2. Cargar historial de cuadros
+    cargarHistorial(userId);
+  };
+
+  const cargarHistorial = async (userId) => {
+    const { data } = await supabase
+      .from('cuadros_guardados')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+
+    if (data) setHistorialCuadros(data);
+  };
+
+  const guardarEntornoEnNube = async () => {
+    if (!session) return;
+    const { error } = await supabase.from('entornos').upsert({
+      user_id: session.user.id,
+      asignaciones,
+      empleados,
+      updated_at: new Date().toISOString()
+    });
+    if (error) alert('Error al guardar entorno: ' + error.message);
+    else alert('Entorno (empleados y asignaciones) guardado correctamente.');
+  };
+
+  const guardarCuadroEnHistorial = async () => {
+    if (!session || !matrizPreview) return;
+    const { error } = await supabase.from('cuadros_guardados').insert({
+      user_id: session.user.id,
+      anio,
+      mes,
+      modalidad,
+      dias: diasMes,
+      matriz: matrizPreview
+    });
+    if (error) alert('Error al guardar cuadro: ' + error.message);
+    else {
+      alert('Cuadro guardado en el historial.');
+      cargarHistorial(session.user.id);
+    }
+  };
+
+  const cargarCuadroDeHistorial = (cuadro) => {
+    setAnio(cuadro.anio);
+    setMes(cuadro.mes);
+    setModalidad(cuadro.modalidad);
+    setDiasMes(cuadro.dias);
+    setMatrizPreview(cuadro.matriz);
+  };
+
+  const actualizarPassword = async () => {
+    const { error } = await supabase.auth.updateUser({ password: nuevaClave });
+    if (error) alert('Error: ' + error.message);
+    else {
+      alert('Contraseña actualizada correctamente.');
+      setRecuperandoClave(false);
+      setNuevaClave('');
+    }
+  };
+
+  if (!session) return <Auth />;
+
+  if (recuperandoClave) {
+    return (
+      <div style={{ maxWidth: '400px', margin: '80px auto', padding: '24px', backgroundColor: '#fff', borderRadius: '8px' }}>
+        <h3>Establecer Nueva Contraseña</h3>
+        <input
+          type="password"
+          placeholder="Nueva contraseña"
+          value={nuevaClave}
+          onChange={e => setNuevaClave(e.target.value)}
+          style={{ width: '100%', padding: '10px', margin: '12px 0', borderRadius: '6px', border: '1px solid #ccc' }}
+        />
+        <button onClick={actualizarPassword} style={{ width: '100%', padding: '10px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px' }}>
+          Guardar Nueva Contraseña
+        </button>
+      </div>
+    );
+  }
 
   // --- FUNCIONES DE ASIGNACIONES ---
+  const toggleDiaAsignacion = (diaId) => {
+    const existe = nuevaAsig.diasAplicables.includes(diaId);
+    setNuevaAsig({
+      ...nuevaAsig,
+      diasAplicables: existe
+        ? nuevaAsig.diasAplicables.filter(d => d !== diaId)
+        : [...nuevaAsig.diasAplicables, diaId]
+    });
+  };
+
   const agregarAsignacion = () => {
     if (!nuevaAsig.nombre.trim()) return;
+    if (nuevaAsig.diasAplicables.length === 0) {
+      alert('Selecciona al menos un día de la semana para la asignación.');
+      return;
+    }
     const id = `A${Date.now()}`;
-    setAsignaciones([...asignaciones, { id, ...nuevaAsig, horas: Number(nuevaAsig.horas) }]);
-    setNuevaAsig({ nombre: '', horas: 8, turno: 'DIA' });
+    setAsignaciones([
+      ...asignaciones,
+      {
+        id,
+        nombre: nuevaAsig.nombre.trim(),
+        horas: Number(nuevaAsig.horas),
+        jornada: nuevaAsig.jornada,
+        horario: nuevaAsig.horario.trim(),
+        diasAplicables: nuevaAsig.diasAplicables
+      }
+    ]);
+    setNuevaAsig({
+      nombre: '',
+      horas: 8,
+      jornada: 'AM',
+      horario: '06:00 - 14:00',
+      diasAplicables: [1, 2, 3, 4, 5, 6, 0]
+    });
   };
 
   const eliminarAsignacion = (id) => {
@@ -103,10 +252,7 @@ export default function App() {
       if (emp.id !== empId) return emp;
       const nuevasPet = [...emp.peticiones];
       const valorProcesado = (campo === 'diaInicio' || campo === 'diaFin') ? Number(valor) : valor;
-      nuevasPet[idxPeticion] = {
-        ...nuevasPet[idxPeticion],
-        [campo]: valorProcesado
-      };
+      nuevasPet[idxPeticion] = { ...nuevasPet[idxPeticion], [campo]: valorProcesado };
       return { ...emp, peticiones: nuevasPet };
     }));
   };
@@ -114,20 +260,12 @@ export default function App() {
   const eliminarPeticion = (empId, idxPeticion) => {
     setEmpleados(empleados.map(emp => {
       if (emp.id !== empId) return emp;
-      return {
-        ...emp,
-        peticiones: emp.peticiones.filter((_, i) => i !== idxPeticion)
-      };
+      return { ...emp, peticiones: emp.peticiones.filter((_, i) => i !== idxPeticion) };
     }));
   };
 
   // --- PREVISUALIZACIÓN Y EXCEL ---
-  const novedadesAusencia = [
-    'INCAPACIDAD',
-    'LICENCIA MATERNIDAD',
-    'CALAMIDAD',
-    'VACACIONES'
-  ];
+  const novedadesAusencia = ['INCAPACIDAD', 'LICENCIA MATERNIDAD', 'CALAMIDAD', 'VACACIONES'];
 
   const opcionesTurno = [
     { etiqueta: 'LIBRE', horas: 0 },
@@ -136,10 +274,14 @@ export default function App() {
     { etiqueta: 'LICENCIA MATERNIDAD', horas: 0 },
     { etiqueta: 'CALAMIDAD', horas: 0 },
     { etiqueta: 'VACACIONES', horas: 0 },
-    ...asignaciones.map(a => ({
-      etiqueta: `${a.nombre} (${a.turno})`,
-      horas: Number(a.horas)
-    }))
+    ...asignaciones.map(a => {
+      const jornada = a.jornada || 'AM';
+      const horarioTxt = a.horario ? ` ${a.horario}` : '';
+      return {
+        etiqueta: `${a.nombre} (${jornada}${horarioTxt})`,
+        horas: Number(a.horas)
+      };
+    })
   ];
 
   const recalcularHoras = (cronograma) => {
@@ -188,12 +330,7 @@ export default function App() {
 
     setMatrizPreview([
       ...matrizPreview,
-      {
-        id: `E${Date.now()}`,
-        nombre: nuevoEmpleadoTabla.trim(),
-        cronograma: cronogramaInicial,
-        horasAcumuladas: 0
-      }
+      { id: `E${Date.now()}`, nombre: nuevoEmpleadoTabla.trim(), cronograma: cronogramaInicial, horasAcumuladas: 0 }
     ]);
     setNuevoEmpleadoTabla('');
   };
@@ -221,7 +358,6 @@ export default function App() {
     }
   };
 
-  // --- ESTILOS REUTILIZABLES ---
   const cardStyle = {
     backgroundColor: '#ffffff',
     borderRadius: '8px',
@@ -231,11 +367,7 @@ export default function App() {
     border: '1px solid #e5e7eb'
   };
 
-  const inputStyle = {
-    padding: '8px 10px',
-    borderRadius: '6px',
-    border: '1px solid #d1d5db'
-  };
+  const inputStyle = { padding: '8px 10px', borderRadius: '6px', border: '1px solid #d1d5db' };
 
   const btnPrimary = {
     backgroundColor: '#2563eb',
@@ -252,14 +384,44 @@ export default function App() {
 
   return (
     <div style={{ maxWidth: '1280px', margin: '0 auto', padding: '24px' }}>
-      <header style={{ marginBottom: '24px' }}>
-        <h1 style={{ fontSize: '26px', fontWeight: '700', color: '#111827' }}>
-          Generador de Cuadros de Turnos (Colombia)
-        </h1>
-        <p style={{ color: '#6b7280', fontSize: '14px' }}>
-          Configura horarios, asignaciones, novedades del personal y exporta a Excel con festivos colombianos.
-        </p>
+      {/* BARRA SUPERIOR DE USUARIO Y GUARDADO DE ENTORNO */}
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '24px', backgroundColor: '#fff', padding: '16px 20px', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
+        <div>
+          <h1 style={{ fontSize: '22px', fontWeight: '700', color: '#111827' }}>
+            Generador de Cuadros de Turnos (Colombia)
+          </h1>
+          <span style={{ fontSize: '13px', color: '#6b7280' }}>Usuario: {session.user.email}</span>
+        </div>
+
+        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+          <button onClick={guardarEntornoEnNube} style={{ ...btnPrimary, backgroundColor: '#0d9488' }}>
+            <Save size={16} /> Guardar Empleados y Asignaciones
+          </button>
+          <button onClick={() => supabase.auth.signOut()} style={{ ...btnPrimary, backgroundColor: '#6b7280' }}>
+            <LogOut size={16} /> Cerrar Sesión
+          </button>
+        </div>
       </header>
+
+      {/* HISTORIAL DE CUADROS ANTERIORES */}
+      {historialCuadros.length > 0 && (
+        <section style={cardStyle}>
+          <h2 style={{ fontSize: '16px', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <History size={18} color="#2563eb" /> Cuadros Guardados Anteriormente
+          </h2>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            {historialCuadros.map(c => (
+              <button
+                key={c.id}
+                onClick={() => cargarCuadroDeHistorial(c)}
+                style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #93c5fd', backgroundColor: '#eff6ff', cursor: 'pointer', fontSize: '13px' }}
+              >
+                Mes {c.mes}/{c.anio} ({new Date(c.created_at).toLocaleDateString()})
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* SECCIÓN 1: CONFIGURACIÓN DEL MES Y HORARIO */}
       <section style={cardStyle}>
@@ -269,47 +431,35 @@ export default function App() {
         <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
           <div>
             <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Mes (1-12)</label>
-            <input
-              type="number"
-              min="1"
-              max="12"
-              value={mes}
-              onChange={e => setMes(Number(e.target.value))}
-              style={{ ...inputStyle, width: '90px' }}
-            />
+            <input type="number" min="1" max="12" value={mes} onChange={e => setMes(Number(e.target.value))} style={{ ...inputStyle, width: '90px' }} />
           </div>
           <div>
             <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Año</label>
-            <input
-              type="number"
-              value={anio}
-              onChange={e => setAnio(Number(e.target.value))}
-              style={{ ...inputStyle, width: '110px' }}
-            />
+            <input type="number" value={anio} onChange={e => setAnio(Number(e.target.value))} style={{ ...inputStyle, width: '110px' }} />
           </div>
           <div style={{ flex: 1, minWidth: '280px' }}>
             <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Jornada / Horario</label>
             <select value={modalidad} onChange={e => setModalidad(e.target.value)} style={{ ...inputStyle, width: '100%' }}>
-              <option value="LUNES_SABADO_DIA">Lunes a Sábado (Sin festivos, solo turnos de día)</option>
-              <option value="LUNES_DOMINGO_24H">Lunes a Domingo (Incluye festivos, turnos día y noche)</option>
+              <option value="LUNES_SABADO_DIA">Lunes a Sábado (Sin festivos, solo turnos AM)</option>
+              <option value="LUNES_DOMINGO_24H">Lunes a Domingo 24 Horas (Incluye festivos, turnos AM y PM)</option>
             </select>
           </div>
         </div>
       </section>
 
-      {/* SECCIÓN 2: ASIGNACIONES Y HORAS */}
+      {/* SECCIÓN 2: ASIGNACIONES CON AM/PM, HORARIO Y DÍAS */}
       <section style={cardStyle}>
         <h2 style={{ fontSize: '18px', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Briefcase size={20} color="#2563eb" /> 2. Asignaciones y Cantidad de Horas
+          <Briefcase size={20} color="#2563eb" /> 2. Asignaciones, Jornada (AM/PM), Horario y Días
         </h2>
 
-        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '16px' }}>
+        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '12px', alignItems: 'center' }}>
           <input
             type="text"
-            placeholder="Nombre asignación (ej: Caja 1)"
+            placeholder="Nombre asignación (ej: Urgencias)"
             value={nuevaAsig.nombre}
             onChange={e => setNuevaAsig({ ...nuevaAsig, nombre: e.target.value })}
-            style={{ ...inputStyle, flex: 1, minWidth: '200px' }}
+            style={{ ...inputStyle, flex: 1, minWidth: '180px' }}
           />
           <input
             type="number"
@@ -318,51 +468,82 @@ export default function App() {
             placeholder="Horas"
             value={nuevaAsig.horas}
             onChange={e => setNuevaAsig({ ...nuevaAsig, horas: e.target.value })}
-            style={{ ...inputStyle, width: '90px' }}
+            style={{ ...inputStyle, width: '80px' }}
           />
           <select
-            value={nuevaAsig.turno}
-            onChange={e => setNuevaAsig({ ...nuevaAsig, turno: e.target.value })}
+            value={nuevaAsig.jornada}
+            onChange={e => setNuevaAsig({ ...nuevaAsig, jornada: e.target.value })}
             style={inputStyle}
           >
-            <option value="DIA">Turno Día</option>
-            <option value="NOCHE">Turno Noche</option>
+            <option value="AM">Jornada AM</option>
+            <option value="PM">Jornada PM</option>
           </select>
+          <input
+            type="text"
+            placeholder="Horario (ej: 07:00 - 19:00)"
+            value={nuevaAsig.horario}
+            onChange={e => setNuevaAsig({ ...nuevaAsig, horario: e.target.value })}
+            style={{ ...inputStyle, width: '170px' }}
+          />
           <button onClick={agregarAsignacion} style={btnPrimary}>
             <Plus size={16} /> Agregar Asignación
           </button>
         </div>
 
-        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-          {asignaciones.map(asig => (
-            <div
-              key={asig.id}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '10px',
-                padding: '8px 12px',
-                backgroundColor: '#eff6ff',
-                border: '1px solid #bfdbfe',
-                borderRadius: '6px'
-              }}
-            >
-              <span>
-                <strong>{asig.nombre}</strong> — {asig.horas}h ({asig.turno})
-              </span>
-              <button
-                onClick={() => eliminarAsignacion(asig.id)}
-                style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer' }}
-                title="Eliminar asignación"
-              >
-                <Trash2 size={15} />
-              </button>
-            </div>
+        {/* Selector de días aplicables */}
+        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '16px', fontSize: '13px' }}>
+          <span style={{ fontWeight: '600', color: '#4b5563' }}>Días en que aplica:</span>
+          {DIAS_SEMANA.map(d => (
+            <label key={d.id} style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={nuevaAsig.diasAplicables.includes(d.id)}
+                onChange={() => toggleDiaAsignacion(d.id)}
+              />
+              {d.label}
+            </label>
           ))}
+        </div>
+
+        {/* Tarjetas de asignaciones creadas */}
+        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+          {asignaciones.map(asig => {
+            const diasTexto = (asig.diasAplicables || [])
+              .map(id => DIAS_SEMANA.find(d => d.id === id)?.label)
+              .filter(Boolean)
+              .join(', ');
+
+            return (
+              <div
+                key={asig.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  padding: '8px 12px',
+                  backgroundColor: '#eff6ff',
+                  border: '1px solid #bfdbfe',
+                  borderRadius: '6px',
+                  fontSize: '13px'
+                }}
+              >
+                <div>
+                  <strong>{asig.nombre}</strong> — {asig.horas}h ({asig.jornada} | {asig.horario || 'Sin horario'})
+                  <div style={{ fontSize: '11px', color: '#4b5563' }}>Días: {diasTexto || 'Todos'}</div>
+                </div>
+                <button
+                  onClick={() => eliminarAsignacion(asig.id)}
+                  style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer' }}
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
+            );
+          })}
         </div>
       </section>
 
-      {/* SECCIÓN 3: EMPLEADOS, HABILIDADES Y PETICIONES / NOVEDADES */}
+      {/* SECCIÓN 3: EMPLEADOS, HABILIDADES Y NOVEDADES */}
       <section style={cardStyle}>
         <h2 style={{ fontSize: '18px', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Users size={20} color="#2563eb" /> 3. Empleados, Asignaciones Permitidas y Novedades
@@ -394,7 +575,6 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Asignaciones permitidas */}
               <div style={{ marginBottom: '12px' }}>
                 <div style={{ fontSize: '12px', fontWeight: '600', color: '#4b5563', marginBottom: '6px' }}>
                   Asignaciones que puede realizar:
@@ -407,13 +587,12 @@ export default function App() {
                         checked={emp.asignacionesPermitidas.includes(asig.id)}
                         onChange={() => togglePermisoAsignacion(emp.id, asig.id)}
                       />
-                      {asig.nombre}
+                      {asig.nombre} ({asig.jornada})
                     </label>
                   ))}
                 </div>
               </div>
 
-              {/* Peticiones y novedades del empleado */}
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                   <span style={{ fontSize: '12px', fontWeight: '600', color: '#4b5563' }}>Peticiones / Novedades:</span>
@@ -424,10 +603,6 @@ export default function App() {
                     + Agregar Novedad
                   </button>
                 </div>
-
-                {emp.peticiones.length === 0 && (
-                  <p style={{ fontSize: '12px', color: '#9ca3af', fontStyle: 'italic' }}>Sin peticiones ni ausencias registradas</p>
-                )}
 
                 {emp.peticiones.map((pet, idxPet) => (
                   <div key={idxPet} style={{ display: 'flex', gap: '4px', alignItems: 'center', marginTop: '6px', flexWrap: 'wrap' }}>
@@ -455,7 +630,7 @@ export default function App() {
                       style={{ ...inputStyle, padding: '4px', flex: 1, minWidth: '140px' }}
                     >
                       <option value="LIBRE">Día Libre</option>
-                      <option value="SOLO_DIA">Solo Turno Día</option>
+                      <option value="SOLO_DIA">Solo Turno AM</option>
                       <option value="INCAPACIDAD">Incapacidad</option>
                       <option value="LICENCIA MATERNIDAD">Licencia de Maternidad</option>
                       <option value="CALAMIDAD">Calamidad</option>
@@ -475,7 +650,7 @@ export default function App() {
         </div>
       </section>
 
-      {/* BOTÓN PRINCIPAL DE GENERACIÓN */}
+      {/* BOTÓN PRINCIPAL */}
       <div style={{ marginBottom: '24px' }}>
         <button
           onClick={generarPrevisualizacion}
@@ -485,16 +660,16 @@ export default function App() {
         </button>
       </div>
 
-      {/* SECCIÓN 4: TABLA INTERACTIVA DE PREVISUALIZACIÓN */}
+      {/* SECCIÓN 4: TABLA INTERACTIVA */}
       {matrizPreview && (
         <section style={cardStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
-            <h2 style={{ fontSize: '18px' }}>Vista Previa Editable (Ajustes de último minuto)</h2>
+            <h2 style={{ fontSize: '18px' }}>Vista Previa Editable</h2>
 
             <div style={{ display: 'flex', gap: '8px' }}>
               <input
                 type="text"
-                placeholder="Agregar persona de último minuto..."
+                placeholder="Agregar persona..."
                 value={nuevoEmpleadoTabla}
                 onChange={e => setNuevoEmpleadoTabla(e.target.value)}
                 style={inputStyle}
@@ -504,12 +679,14 @@ export default function App() {
               </button>
             </div>
 
-            <button
-              onClick={exportarExcel}
-              style={{ ...btnPrimary, backgroundColor: '#15803d', padding: '10px 20px' }}
-            >
-              <Download size={18} /> Exportar a Excel (.xlsx)
-            </button>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button onClick={guardarCuadroEnHistorial} style={{ ...btnPrimary, backgroundColor: '#7c3aed' }}>
+                <Save size={18} /> Guardar en Historial
+              </button>
+              <button onClick={exportarExcel} style={{ ...btnPrimary, backgroundColor: '#15803d' }}>
+                <Download size={18} /> Exportar Excel (.xlsx)
+              </button>
+            </div>
           </div>
 
           <div style={{ overflowX: 'auto', border: '1px solid #d1d5db', borderRadius: '6px' }}>
@@ -525,7 +702,7 @@ export default function App() {
                       style={{
                         border: '1px solid #d1d5db',
                         padding: '8px',
-                        minWidth: '160px',
+                        minWidth: '185px',
                         backgroundColor: d.esDomingo || d.esFestivo ? '#fee2e2' : '#e0e7ff',
                         color: d.esDomingo || d.esFestivo ? '#991b1b' : '#1e3a8a'
                       }}
@@ -592,7 +769,6 @@ export default function App() {
                       <button
                         onClick={() => quitarFilaEnPreview(empIndex)}
                         style={{ color: '#dc2626', background: 'none', border: 'none', cursor: 'pointer' }}
-                        title="Eliminar del cuadro"
                       >
                         <Trash2 size={16} />
                       </button>
