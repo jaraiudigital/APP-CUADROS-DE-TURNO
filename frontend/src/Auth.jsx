@@ -1,11 +1,13 @@
 // frontend/src/Auth.jsx
 import { useState } from 'react';
 import { supabase } from './supabaseClient';
+import { Eye, EyeOff } from 'lucide-react';
 
 export default function Auth() {
   const [modo, setModo] = useState('LOGIN'); // 'LOGIN' | 'REGISTRO' | 'RECUPERAR'
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [mostrarClave, setMostrarClave] = useState(false);
   const [mensaje, setMensaje] = useState('');
   const [cargando, setCargando] = useState(false);
 
@@ -27,7 +29,7 @@ export default function Auth() {
           redirectTo: window.location.origin
         });
         if (error) throw error;
-        setMensaje('Te enviamos un enlace a tu correo para restablecer la contraseña.');
+        setMensaje('Te enviamos un enlace a tu correo. Haz clic en él para abrir el menú de cambio de contraseña.');
       }
     } catch (err) {
       setMensaje('Error: ' + err.message);
@@ -55,14 +57,24 @@ export default function Auth() {
         />
 
         {modo !== 'RECUPERAR' && (
-          <input
-            type="password"
-            placeholder="Contraseña (mínimo 6 caracteres)"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            required
-            style={{ padding: '10px', borderRadius: '6px', border: '1px solid #d1d5db' }}
-          />
+          <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+            <input
+              type={mostrarClave ? 'text' : 'password'}
+              placeholder="Contraseña (mínimo 6 caracteres)"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              required
+              style={{ width: '100%', padding: '10px 38px 10px 10px', borderRadius: '6px', border: '1px solid #d1d5db' }}
+            />
+            <button
+              type="button"
+              onClick={() => setMostrarClave(!mostrarClave)}
+              style={{ position: 'absolute', right: '10px', background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', display: 'flex' }}
+              title={mostrarClave ? 'Ocultar contraseña' : 'Ver contraseña'}
+            >
+              {mostrarClave ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
+          </div>
         )}
 
         <button

@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { supabase } from './supabaseClient';
 import Auth from './Auth';
-import { Plus, Trash2, Eye, Download, Calendar, Users, Briefcase, Save, History, LogOut } from 'lucide-react';
+import { Plus, Trash2, Eye, EyeOff, Download, Calendar, Users, Briefcase, Save, History, LogOut, KeyRound } from 'lucide-react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
@@ -17,23 +17,44 @@ const DIAS_SEMANA = [
   { id: 0, label: 'Dom' }
 ];
 
+// Generar opciones de hora cada 30 minutos (00:00 a 23:30)
+const OPCIONES_HORA = Array.from({ length: 48 }, (_, i) => {
+  const hh = String(Math.floor(i / 2)).padStart(2, '0');
+  const mm = i % 2 === 0 ? '00' : '30';
+  return `${hh}:${mm}`;
+});
+
+// Calcular horas transcurridas entre horaDesde y horaHasta (soporta cruce de medianoche)
+function calcularDuracionHoras(desde, hasta) {
+  const [h1, m1] = desde.split(':').map(Number);
+  const [h2, m2] = hasta.split(':').map(Number);
+  let min1 = h1 * 60 + m1;
+  let min2 = h2 * 60 + m2;
+  if (min2 <= min1) min2 += 24 * 60;
+  return Number(((min2 - min1) / 60).toFixed(1));
+}
+
 export default function App() {
   const [session, setSession] = useState(null);
   const [recuperandoClave, setRecuperandoClave] = useState(false);
   const [nuevaClave, setNuevaClave] = useState('');
+  const [confirmarClave, setConfirmarClave] = useState('');
+  const [verNuevaClave, setVerNuevaClave] = useState(false);
+  const [errorClave, setErrorClave] = useState('');
 
   // Configuración general
   const [anio, setAnio] = useState(2026);
   const [mes, setMes] = useState(11);
   const [modalidad, setModalidad] = useState('LUNES_DOMINGO_24H');
 
-  // Asignaciones con AM/PM, horario y días aplicables
+  // Asignaciones con Jornada (MAÑANA, TARDE, CORRIDO, NOCHE), Desde, Hasta y días aplicables
   const [asignaciones, setAsignaciones] = useState([]);
   const [nuevaAsig, setNuevaAsig] = useState({
     nombre: '',
+    jornada: 'MAÑANA',
+    horaDesde: '06:00',
+    horaHasta: '14:00',
     horas: 8,
-    jornada: 'AM',
-    horario: '06:00 - 14:00',
     diasAplicables: [1, 2, 3, 4, 5, 6, 0]
   });
 
@@ -47,8 +68,14 @@ export default function App() {
   const [nuevoEmpleadoTabla, setNuevoEmpleadoTabla] = useState('');
   const [historialCuadros, setHistorialCuadros] = useState([]);
 
-  // --- CONTROL DE SESIÓN ---
+  // --- CONTROL DE SESIÓN Y DETECCIÓN DE RECUPERACIÓN ---
   useEffect(() => {
+    const hashParams = new URLSearchParams(window.location.hash.substring(1));
+    const queryParams = new URLSearchParams(window.location.search);
+    if (hashParams.get('type') === 'recovery' || queryParams.get('type') === 'recovery') {
+      setRecuperandoClave(true);
+    }
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       if (session) cargarDatosUsuario(session.user.id);
@@ -66,7 +93,6 @@ export default function App() {
   }, []);
 
   const cargarDatosUsuario = async (userId) => {
-    // 1. Cargar entorno (empleados y asignaciones)
     const { data: entorno } = await supabase
       .from('entornos')
       .select('*')
@@ -78,7 +104,6 @@ export default function App() {
       setEmpleados(entorno.empleados || []);
     }
 
-    // 2. Cargar historial de cuadros
     cargarHistorial(userId);
   };
 
@@ -129,37 +154,127 @@ export default function App() {
     setMatrizPreview(cuadro.matriz);
   };
 
-  const actualizarPassword = async () => {
+  const actualizarPassword = async (e) => {
+    e.preventDefault();
+    setErrorClave('');
+
+    if (nuevaClave.length < 6) {
+      setErrorClave('La contraseña debe tener al menos 6 caracteres.');
+      return;
+    }
+    if (nuevaClave !== confirmarClave) {
+      setErrorClave('Las contraseñas no coinciden.');
+      return;
+    }
+
     const { error } = await supabase.auth.updateUser({ password: nuevaClave });
-    if (error) alert('Error: ' + error.message);
-    else {
+    if (error) {
+      setErrorClave('Error al actualizar: ' + error.message);
+    } else {
       alert('Contraseña actualizada correctamente.');
+      window.history.replaceState(null, '', window.location.pathname);
       setRecuperandoClave(false);
       setNuevaClave('');
+      setConfirmarClave('');
     }
   };
 
-  if (!session) return <Auth />;
+  if (!session && !recuperandoClave) return <Auth />;
 
   if (recuperandoClave) {
     return (
-      <div style={{ maxWidth: '400px', margin: '80px auto', padding: '24px', backgroundColor: '#fff', borderRadius: '8px' }}>
-        <h3>Establecer Nueva Contraseña</h3>
-        <input
-          type="password"
-          placeholder="Nueva contraseña"
-          value={nuevaClave}
-          onChange={e => setNuevaClave(e.target.value)}
-          style={{ width: '100%', padding: '10px', margin: '12px 0', borderRadius: '6px', border: '1px solid #ccc' }}
-        />
-        <button onClick={actualizarPassword} style={{ width: '100%', padding: '10px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px' }}>
-          Guardar Nueva Contraseña
-        </button>
+      <div style={{ maxWidth: '420px', margin: '80px auto', padding: '24px', backgroundColor: '#fff', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
+        <h2 style={{ marginBottom: '8px', textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+          <KeyRound size={22} color="#2563eb" /> Cambiar Contraseña
+        </h2>
+        <p style={{ fontSize: '13px', color: '#6b7280', textAlign: 'center', marginBottom: '16px' }}>
+          Ingresa y confirma tu nueva contraseña para acceder a tu cuenta.
+        </p>
+
+        <form onSubmit={actualizarPassword} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+            <input
+              type={verNuevaClave ? 'text' : 'password'}
+              placeholder="Nueva contraseña (mínimo 6 caracteres)"
+              value={nuevaClave}
+              onChange={e => setNuevaClave(e.target.value)}
+              required
+              style={{ width: '100%', padding: '10px 38px 10px 10px', borderRadius: '6px', border: '1px solid #d1d5db' }}
+            />
+            <button
+              type="button"
+              onClick={() => setVerNuevaClave(!verNuevaClave)}
+              style={{ position: 'absolute', right: '10px', background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', display: 'flex' }}
+              title={verNuevaClave ? 'Ocultar contraseña' : 'Ver contraseña'}
+            >
+              {verNuevaClave ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
+          </div>
+
+          <input
+            type={verNuevaClave ? 'text' : 'password'}
+            placeholder="Confirmar nueva contraseña"
+            value={confirmarClave}
+            onChange={e => setConfirmarClave(e.target.value)}
+            required
+            style={{ padding: '10px', borderRadius: '6px', border: '1px solid #d1d5db' }}
+          />
+
+          {errorClave && (
+            <p style={{ fontSize: '13px', color: '#dc2626', margin: 0 }}>{errorClave}</p>
+          )}
+
+          <button
+            type="submit"
+            style={{ padding: '10px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}
+          >
+            Guardar Nueva Contraseña
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              window.history.replaceState(null, '', window.location.pathname);
+              setRecuperandoClave(false);
+              setErrorClave('');
+            }}
+            style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: '13px' }}
+          >
+            Cancelar
+          </button>
+        </form>
       </div>
     );
   }
 
   // --- FUNCIONES DE ASIGNACIONES ---
+  const cambiarJornadaPredefinida = (jornada) => {
+    const presets = {
+      MAÑANA: { desde: '06:00', hasta: '14:00' },
+      TARDE: { desde: '14:00', hasta: '22:00' },
+      CORRIDO: { desde: '07:00', hasta: '17:00' },
+      NOCHE: { desde: '19:00', hasta: '07:00' }
+    };
+    const sel = presets[jornada] || { desde: '06:00', hasta: '14:00' };
+    setNuevaAsig({
+      ...nuevaAsig,
+      jornada,
+      horaDesde: sel.desde,
+      horaHasta: sel.hasta,
+      horas: calcularDuracionHoras(sel.desde, sel.hasta)
+    });
+  };
+
+  const cambiarHoraRango = (campo, valor) => {
+    const desde = campo === 'horaDesde' ? valor : nuevaAsig.horaDesde;
+    const hasta = campo === 'horaHasta' ? valor : nuevaAsig.horaHasta;
+    setNuevaAsig({
+      ...nuevaAsig,
+      [campo]: valor,
+      horas: calcularDuracionHoras(desde, hasta)
+    });
+  };
+
   const toggleDiaAsignacion = (diaId) => {
     const existe = nuevaAsig.diasAplicables.includes(diaId);
     setNuevaAsig({
@@ -177,6 +292,7 @@ export default function App() {
       return;
     }
     const id = `A${Date.now()}`;
+    const horarioFormateado = `${nuevaAsig.horaDesde} - ${nuevaAsig.horaHasta}`;
     setAsignaciones([
       ...asignaciones,
       {
@@ -184,15 +300,18 @@ export default function App() {
         nombre: nuevaAsig.nombre.trim(),
         horas: Number(nuevaAsig.horas),
         jornada: nuevaAsig.jornada,
-        horario: nuevaAsig.horario.trim(),
+        horaDesde: nuevaAsig.horaDesde,
+        horaHasta: nuevaAsig.horaHasta,
+        horario: horarioFormateado,
         diasAplicables: nuevaAsig.diasAplicables
       }
     ]);
     setNuevaAsig({
       nombre: '',
+      jornada: 'MAÑANA',
+      horaDesde: '06:00',
+      horaHasta: '14:00',
       horas: 8,
-      jornada: 'AM',
-      horario: '06:00 - 14:00',
       diasAplicables: [1, 2, 3, 4, 5, 6, 0]
     });
   };
@@ -275,7 +394,7 @@ export default function App() {
     { etiqueta: 'CALAMIDAD', horas: 0 },
     { etiqueta: 'VACACIONES', horas: 0 },
     ...asignaciones.map(a => {
-      const jornada = a.jornada || 'AM';
+      const jornada = a.jornada || 'MAÑANA';
       const horarioTxt = a.horario ? ` ${a.horario}` : '';
       return {
         etiqueta: `${a.nombre} (${jornada}${horarioTxt})`,
@@ -397,6 +516,9 @@ export default function App() {
           <button onClick={guardarEntornoEnNube} style={{ ...btnPrimary, backgroundColor: '#0d9488' }}>
             <Save size={16} /> Guardar Empleados y Asignaciones
           </button>
+          <button onClick={() => setRecuperandoClave(true)} style={{ ...btnPrimary, backgroundColor: '#4b5563' }}>
+            <KeyRound size={16} /> Cambiar Contraseña
+          </button>
           <button onClick={() => supabase.auth.signOut()} style={{ ...btnPrimary, backgroundColor: '#6b7280' }}>
             <LogOut size={16} /> Cerrar Sesión
           </button>
@@ -440,52 +562,85 @@ export default function App() {
           <div style={{ flex: 1, minWidth: '280px' }}>
             <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Jornada / Horario</label>
             <select value={modalidad} onChange={e => setModalidad(e.target.value)} style={{ ...inputStyle, width: '100%' }}>
-              <option value="LUNES_SABADO_DIA">Lunes a Sábado (Sin festivos, solo turnos AM)</option>
-              <option value="LUNES_DOMINGO_24H">Lunes a Domingo 24 Horas (Incluye festivos, turnos AM y PM)</option>
+              <option value="LUNES_SABADO_DIA">Lunes a Sábado (Sin festivos, solo turnos diurnos)</option>
+              <option value="LUNES_DOMINGO_24H">Lunes a Domingo 24 Horas (Incluye festivos, todos los turnos)</option>
             </select>
           </div>
         </div>
       </section>
 
-      {/* SECCIÓN 2: ASIGNACIONES CON AM/PM, HORARIO Y DÍAS */}
+      {/* SECCIÓN 2: ASIGNACIONES CON JORNADA (MAÑANA, TARDE, CORRIDO, NOCHE), DESDE - HASTA Y DÍAS */}
       <section style={cardStyle}>
         <h2 style={{ fontSize: '18px', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Briefcase size={20} color="#2563eb" /> 2. Asignaciones, Jornada (AM/PM), Horario y Días
+          <Briefcase size={20} color="#2563eb" /> 2. Asignaciones, Jornada, Horario (Desde - Hasta) y Días
         </h2>
 
-        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '12px', alignItems: 'center' }}>
-          <input
-            type="text"
-            placeholder="Nombre asignación (ej: Urgencias)"
-            value={nuevaAsig.nombre}
-            onChange={e => setNuevaAsig({ ...nuevaAsig, nombre: e.target.value })}
-            style={{ ...inputStyle, flex: 1, minWidth: '180px' }}
-          />
-          <input
-            type="number"
-            min="1"
-            max="24"
-            placeholder="Horas"
-            value={nuevaAsig.horas}
-            onChange={e => setNuevaAsig({ ...nuevaAsig, horas: e.target.value })}
-            style={{ ...inputStyle, width: '80px' }}
-          />
-          <select
-            value={nuevaAsig.jornada}
-            onChange={e => setNuevaAsig({ ...nuevaAsig, jornada: e.target.value })}
-            style={inputStyle}
-          >
-            <option value="AM">Jornada AM</option>
-            <option value="PM">Jornada PM</option>
-          </select>
-          <input
-            type="text"
-            placeholder="Horario (ej: 07:00 - 19:00)"
-            value={nuevaAsig.horario}
-            onChange={e => setNuevaAsig({ ...nuevaAsig, horario: e.target.value })}
-            style={{ ...inputStyle, width: '170px' }}
-          />
-          <button onClick={agregarAsignacion} style={btnPrimary}>
+        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '12px', alignItems: 'flex-end' }}>
+          <div style={{ flex: 1, minWidth: '180px' }}>
+            <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Nombre asignación</label>
+            <input
+              type="text"
+              placeholder="Ej: Urgencias, Consulta..."
+              value={nuevaAsig.nombre}
+              onChange={e => setNuevaAsig({ ...nuevaAsig, nombre: e.target.value })}
+              style={{ ...inputStyle, width: '100%' }}
+            />
+          </div>
+
+          <div>
+            <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Jornada</label>
+            <select
+              value={nuevaAsig.jornada}
+              onChange={e => cambiarJornadaPredefinida(e.target.value)}
+              style={inputStyle}
+            >
+              <option value="MAÑANA">Mañana</option>
+              <option value="TARDE">Tarde</option>
+              <option value="CORRIDO">Corrido</option>
+              <option value="NOCHE">Noche</option>
+            </select>
+          </div>
+
+          <div>
+            <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Desde</label>
+            <select
+              value={nuevaAsig.horaDesde}
+              onChange={e => cambiarHoraRango('horaDesde', e.target.value)}
+              style={inputStyle}
+            >
+              {OPCIONES_HORA.map(h => (
+                <option key={h} value={h}>{h}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Hasta</label>
+            <select
+              value={nuevaAsig.horaHasta}
+              onChange={e => cambiarHoraRango('horaHasta', e.target.value)}
+              style={inputStyle}
+            >
+              {OPCIONES_HORA.map(h => (
+                <option key={h} value={h}>{h}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Duración (h)</label>
+            <input
+              type="number"
+              step="0.5"
+              min="1"
+              max="24"
+              value={nuevaAsig.horas}
+              onChange={e => setNuevaAsig({ ...nuevaAsig, horas: e.target.value })}
+              style={{ ...inputStyle, width: '85px' }}
+            />
+          </div>
+
+          <button onClick={agregarAsignacion} style={{ ...btnPrimary, height: '36px' }}>
             <Plus size={16} /> Agregar Asignación
           </button>
         </div>
@@ -528,7 +683,7 @@ export default function App() {
                 }}
               >
                 <div>
-                  <strong>{asig.nombre}</strong> — {asig.horas}h ({asig.jornada} | {asig.horario || 'Sin horario'})
+                  <strong>{asig.nombre}</strong> — {asig.jornada} ({asig.horario}) · <strong>{asig.horas}h</strong>
                   <div style={{ fontSize: '11px', color: '#4b5563' }}>Días: {diasTexto || 'Todos'}</div>
                 </div>
                 <button
@@ -630,7 +785,7 @@ export default function App() {
                       style={{ ...inputStyle, padding: '4px', flex: 1, minWidth: '140px' }}
                     >
                       <option value="LIBRE">Día Libre</option>
-                      <option value="SOLO_DIA">Solo Turno AM</option>
+                      <option value="SOLO_DIA">Solo Turno Diurno (Sin Noche)</option>
                       <option value="INCAPACIDAD">Incapacidad</option>
                       <option value="LICENCIA MATERNIDAD">Licencia de Maternidad</option>
                       <option value="CALAMIDAD">Calamidad</option>
@@ -702,7 +857,7 @@ export default function App() {
                       style={{
                         border: '1px solid #d1d5db',
                         padding: '8px',
-                        minWidth: '185px',
+                        minWidth: '210px',
                         backgroundColor: d.esDomingo || d.esFestivo ? '#fee2e2' : '#e0e7ff',
                         color: d.esDomingo || d.esFestivo ? '#991b1b' : '#1e3a8a'
                       }}

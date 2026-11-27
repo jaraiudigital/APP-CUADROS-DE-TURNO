@@ -10,7 +10,7 @@ function generarMatrizTurnos(dias, empleados, asignaciones, modalidad) {
   const controlEmpleados = empleados.map(emp => ({
     ...emp,
     horasAcumuladas: 0,
-    ultimaJornada: null, // 'AM' o 'PM'
+    ultimaJornada: null, // 'MAÑANA', 'TARDE', 'CORRIDO' o 'NOCHE'
     cronograma: {}
   }));
 
@@ -33,7 +33,7 @@ function generarMatrizTurnos(dias, empleados, asignaciones, modalidad) {
     });
   });
 
-  // 2. Asignar turnos respetando jornada AM/PM, horario y días aplicables
+  // 2. Asignar turnos respetando jornada, horario (Desde - Hasta) y días aplicables
   dias.forEach(dia => {
     const fechaObj = new Date(dia.fecha + 'T00:00:00');
     const diaSemana = fechaObj.getDay(); // 0=Dom ... 6=Sáb
@@ -50,10 +50,9 @@ function generarMatrizTurnos(dias, empleados, asignaciones, modalidad) {
 
     // Filtrar asignaciones activas para ese día de la semana y modalidad
     const asignacionesDelDia = asignaciones.filter(a => {
-      const jornada = a.jornada || (a.turno === 'NOCHE' ? 'PM' : 'AM');
-      if (modalidad === 'LUNES_SABADO_DIA' && jornada === 'PM') return false;
+      const jornada = a.jornada || 'MAÑANA';
+      if (modalidad === 'LUNES_SABADO_DIA' && jornada === 'NOCHE') return false;
 
-      // Verificar si la asignación aplica este día de la semana
       if (Array.isArray(a.diasAplicables) && a.diasAplicables.length > 0) {
         return a.diasAplicables.includes(diaSemana);
       }
@@ -61,7 +60,7 @@ function generarMatrizTurnos(dias, empleados, asignaciones, modalidad) {
     });
 
     asignacionesDelDia.forEach(asig => {
-      const jornadaAsig = asig.jornada || (asig.turno === 'NOCHE' ? 'PM' : 'AM');
+      const jornadaAsig = asig.jornada || 'MAÑANA';
       const etiquetaHorario = asig.horario ? ` ${asig.horario}` : '';
       const etiquetaTurno = `${asig.nombre} (${jornadaAsig}${etiquetaHorario})`;
 
@@ -76,11 +75,13 @@ function generarMatrizTurnos(dias, empleados, asignaciones, modalidad) {
           });
 
           if (peticion?.tipo === 'LIBRE') return false;
-          if (peticion?.tipo === 'SOLO_DIA' && jornadaAsig === 'PM') return false;
+          if (peticion?.tipo === 'SOLO_DIA' && jornadaAsig === 'NOCHE') return false;
           if (!emp.asignacionesPermitidas.includes(asig.id)) return false;
 
-          // Evitar doblar turno: PM ayer -> AM hoy
-          if (emp.ultimaJornada === 'PM' && jornadaAsig === 'AM') return false;
+          // Evitar doblar turno: NOCHE ayer -> MAÑANA o CORRIDO hoy
+          if (emp.ultimaJornada === 'NOCHE' && (jornadaAsig === 'MAÑANA' || jornadaAsig === 'CORRIDO')) {
+            return false;
+          }
 
           return true;
         })
